@@ -31,8 +31,16 @@ enum FRAME_DATA{
 	F_SPEEDV0, F_SPEEDV1, F_SPEEDV2,
 	F_VELVEL0, F_VELVEL1, F_VELVEL2, F_STAMINA
 }
+enum PLAY_MODE{
+	PL_TELEPORT = 0,
+	PL_FAKEINPUT,
+	PL_SETENTPROP,
+	PLCOUNT
+}
+
 #define REWIND_STEP g_rewsteps[g_rewindstep[client]]
 #define FRAME_SIZE 16
+int				g_playmode = 0;
 int       g_rewsteps[] = {1,2,4,8,16,32};
 int       g_rewindstep[MAXPLAYERS+1];
 int       g_framenum[MAXPLAYERS+1];
@@ -42,7 +50,7 @@ TAP_STATE g_tapstate[MAXPLAYERS+1];
 ArrayList g_recframes[MAXPLAYERS+1];
 int       g_last_pause_frame[MAXPLAYERS+1];
 bool      g_playstate_firstframe[MAXPLAYERS+1];
-bool      g_alwaystp;
+bool cheater = false;
 public void OnPluginStart(){
 	int i;
 	for(i=1;i<MaxClients;i++)
@@ -63,20 +71,27 @@ public void OnPluginStart(){
 	RegConsoleCmd("ta_tickrew", Cmd_Rew1Tick);
 	
 	RegConsoleCmd("ta_rewstep", Cmd_RewStep);
-	RegConsoleCmd("ta_alwaystp", Cmd_AlwaysTp);
 	
 	RegConsoleCmd("ta_load", Cmd_Load);
 	RegConsoleCmd("ta_save", Cmd_Save);
+	
+	CreateConVar("ta_cheater", "0").AddChangeHook(ShowMenu);
+	CreateConVar("ta_playmode", "0", "0/teleport;1/fakebtn;2/entprop", FCVAR_NOTIFY).AddChangeHook(PlayModeChange);
 }
+public void ShowMenu(ConVar c, const char[] s, const char[] s2){
+	cheater = c.BoolValue;
+}
+public void PlayModeChange(ConVar c, const char[] s, const char[] s2){
+	g_playmode = c.IntValue;
+	if(g_playmode>=view_as<int>(PLCOUNT))
+		c.IntValue = view_as<int>(PLCOUNT)-1;
+}
+
 public Action Cmd_RewStep(int client, int argc){
 	if(client==0) client=1;
 	g_rewindstep[client]++;
 	if(g_rewindstep[client]>=sizeof(g_rewsteps))
 		g_rewindstep[client]=0;
-	return Plugin_Handled;
-}
-public Action Cmd_AlwaysTp(int client, int argc){
-	g_alwaystp ^= true;
 	return Plugin_Handled;
 }
 
@@ -183,52 +198,68 @@ stock void LoadFrame(int client, frame[FRAME_SIZE], bool teleport, int &buttons,
 	speedv[1]                 = view_as<float>(frame[F_SPEEDV1]);
 	speedv[2]                 = view_as<float>(frame[F_SPEEDV2]);
 	SetEntPropFloat(client, Prop_Send, "m_flStamina", stamina);
-	if(teleport||g_alwaystp){
+	if(teleport){
 		SetEntityFlags(client, flags);
 		SetEntityMoveType(client, movetype);
 		TeleportEntity(client, origin, angles, speedv);
 	}
+	else
+		switch(g_playmode){
+			case PL_TELEPORT:{
+				SetEntityFlags(client, flags);
+				SetEntityMoveType(client, movetype);
+				TeleportEntity(client, origin, angles, speedv);
+			}
+			case PL_FAKEINPUT:{
+			}
+			case PL_SETENTPROP:{
+				SetEntityFlags(client, flags);
+				SetEntityMoveType(client, movetype);
+				SetEntPropVector(client, Prop_Send, "m_vecOrigin", origin);
+				SetEntPropVector(client, Prop_Data, "m_vecVelocity", speedv);
+			}
+		}
 }
 
 public Action Cmd_Start(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]!=TAS_NONE){
-		PrintToChat(client, "[KF] Already in TAS");
+		PrintToConsole(client, "[KF] Already in TAS");
 		return Plugin_Handled;
 	}
 	g_framenum[client]=0;
 	g_recframes[client].Resize(0);
 	g_tasstate[client]=TAS_RECORD;
 	g_tapstate[client]=TAP_NONE;
-	PrintToChat(client, "[KF] Started TAS");
+	PrintToConsole(client, "[KF] Started TAS");
 	return Plugin_Handled;
 }
 public Action Cmd_Stop(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	g_framenum[client]=0;
 	g_recframes[client].Resize(0);
 	g_tasstate[client]=TAS_NONE;
 	g_tapstate[client]=TAP_NONE;
-	PrintToChat(client, "[KF] Stopped TAS");
+	PrintToConsole(client, "[KF] Stopped TAS");
 	return Plugin_Handled;
 }
 public Action Cmd_Pause(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	if(g_tasstate[client]!=TAS_PAUSE){
 		g_tasstate[client]=TAS_PAUSE;
-		PrintToChat(client, "[KF] paused record/replay");
+		PrintToConsole(client, "[KF] paused record/replay");
 	}
 	else{
 		g_tasstate[client]=g_pauresume[client];
-		PrintToChat(client, "[KF] resumed record/replay");
+		PrintToConsole(client, "[KF] resumed record/replay");
 	}
 	g_tapstate[client]=TAP_NONE;
 	return Plugin_Handled;
@@ -236,39 +267,39 @@ public Action Cmd_Pause(int client, int argc){
 public Action Cmd_ResReplay(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	if(g_tasstate[client]!=TAS_PAUSE){
-		PrintToChat(client, "[KF] You must be in Pause first");
+		PrintToConsole(client, "[KF] You must be in Pause first");
 		return Plugin_Handled;
 	}
 	g_pauresume[client]=TAS_REPLAY;
-	PrintToChat(client, "[KF] will resume to Record");
+	PrintToConsole(client, "[KF] will resume to Record");
 	return Plugin_Handled;
 }
 public Action Cmd_ResRecord(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	if(g_tasstate[client]!=TAS_PAUSE){
-		PrintToChat(client, "[KF] You must be in Pause first");
+		PrintToConsole(client, "[KF] You must be in Pause first");
 		return Plugin_Handled;
 	}
 	g_pauresume[client]=TAS_RECORD;
-	PrintToChat(client, "[KF] will resume to Record");
+	PrintToConsole(client, "[KF] will resume to Record");
 	return Plugin_Handled;
 }
 public Action Cmd_Rewind(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	if(g_tasstate[client]!=TAS_PAUSE){
-		PrintToChat(client, "[KF] You must be in Pause first");
+		PrintToConsole(client, "[KF] You must be in Pause first");
 		return Plugin_Handled;
 	}
 	g_tapstate[client]=TAP_REWIND;
@@ -277,11 +308,11 @@ public Action Cmd_Rewind(int client, int argc){
 public Action Cmd_FastForward(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	if(g_tasstate[client]!=TAS_PAUSE){
-		PrintToChat(client, "[KF] You must be in Pause first");
+		PrintToConsole(client, "[KF] You must be in Pause first");
 		return Plugin_Handled;
 	}
 	g_tapstate[client]=TAP_FSTFWD;
@@ -296,69 +327,69 @@ public Action Cmd_TapNone(int client, int argc){
 public Action Cmd_LastPause(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	g_tasstate[client]=TAS_PAUSE;
 	g_tapstate[client]=TAP_LASTPAU;
-	PrintToChat(client, "[KF] goto last pause");
+	PrintToConsole(client, "[KF] goto last pause");
 	return Plugin_Handled;
 }
 public Action Cmd_GoStart(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	g_tasstate[client]=TAS_PAUSE;
 	g_tapstate[client]=TAP_GOSTART;
-	PrintToChat(client, "[KF] goto start");
+	PrintToConsole(client, "[KF] goto start");
 	return Plugin_Handled;
 }
 public Action Cmd_GotoEnd(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	g_tasstate[client]=TAS_PAUSE;
 	g_tapstate[client]=TAP_GOTOEND;
-	PrintToChat(client, "[KF] goto end");
+	PrintToConsole(client, "[KF] goto end");
 	return Plugin_Handled;
 }
 public Action Cmd_Rew1Tick(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	g_tasstate[client]=TAS_PAUSE;
 	g_tapstate[client]=TAP_REW1TK;
-	PrintToChat(client, "[KF] rewind 1tick");
+	PrintToConsole(client, "[KF] rewind 1tick");
 	return Plugin_Handled;
 }
 public Action Cmd_Ffw1Tick(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]==TAS_NONE){
-		PrintToChat(client, "[KF] Not in TAS");
+		PrintToConsole(client, "[KF] Not in TAS");
 		return Plugin_Handled;
 	}
 	g_tasstate[client]=TAS_PAUSE;
 	g_tapstate[client]=TAP_FFW1TK;
-	PrintToChat(client, "[KF] advance 1tick");
+	PrintToConsole(client, "[KF] advance 1tick");
 	return Plugin_Handled;
 }
 public Action Cmd_Load(int client, int argc){
 	if(client==0) client=1;
 	if(argc<1){
-		PrintToChat(client, "[KF] usage: <this_cmd> <filename>");
+		PrintToConsole(client, "[KF] usage: <this_cmd> <filename>");
 		return Plugin_Handled;
 	}
 	char filename[256];
 	GetCmdArg(1, filename, sizeof(filename));
 	File f = OpenFile(filename, "rb+");
 	if(f==null)
-		PrintToChat(client, "[KF] cannot play %s", filename);
+		PrintToConsole(client, "[KF] cannot play %s", filename);
 	else{
 		new frame[FRAME_SIZE], thisread;
 		ArrayList tmp = new ArrayList(FRAME_SIZE);
@@ -374,10 +405,11 @@ public Action Cmd_Load(int client, int argc){
 			g_pauresume[client]=TAS_REPLAY;
 			g_last_pause_frame[client]=1;
 			g_playstate_firstframe[client]=true;
-			PrintToChat(client, "[KF] loaded %s, framecount %d", filename, tmp.Length);
+			
+			PrintToConsole(client, "[KF] loaded %s, framecount %d", filename, tmp.Length);
 		}
 		else{
-			PrintToChat(client, "[KF] maybe an incomplte replay file");
+			PrintToConsole(client, "[KF] maybe an incomplte replay file");
 			CloseHandle(tmp);
 		}
 		CloseHandle(f);
@@ -387,7 +419,7 @@ public Action Cmd_Load(int client, int argc){
 public Action Cmd_Save(int client, int argc){
 	if(client==0) client=1;
 	if(g_tasstate[client]!=TAS_PAUSE&&g_tasstate[client]!=TAS_REPLAY){
-		PrintToChat(client, "[KF] must be in Pause/Replay to save");
+		PrintToConsole(client, "[KF] must be in Pause/Replay to save");
 		return Plugin_Handled;
 	}
 	char mapname[64];
@@ -403,7 +435,7 @@ public Action Cmd_Save(int client, int argc){
 	Format(filename, sizeof(filename), "%s_%s.tas.kfdem", mapname, filename);
 	File f = OpenFile(filename, "ab+");
 	if(f==null)
-		PrintToChat(client, "[KF] cannot create file for saving");
+		PrintToConsole(client, "[KF] cannot create file for saving");
 	else{
 		for(int i=0;i<g_recframes[client].Length;i++){
 			new write_data[FRAME_SIZE];
@@ -411,14 +443,15 @@ public Action Cmd_Save(int client, int argc){
 			WriteFile(f, write_data, FRAME_SIZE, 4);
 		}
 		CloseHandle(f);
-		PrintToChat(client, "[KF] saved to %s", filename);
+		PrintToConsole(client, "[KF] saved to %s", filename);
 	}
 	return Plugin_Handled;
 }
 
 public void ShowTasHint(int client, int totalframes, frame[FRAME_SIZE]){
+	if(cheater) return;
 	float tickintv = GetTickInterval();
-	SetHudTextParams(0.1, -1.0, 0.1, 0x66, 0xCC, 0xFF, 0xFF, 0, 0.0, 0.0, 0.0);
+	SetHudTextParams(0.1, -1.0, 0.5, 0x66, 0xCC, 0xFF, 0xFF, 0, 0.0, 0.0, 0.0);
 	char str[128];
 	Format(str, sizeof(str),   "KF_TAS\n");
 	Format(str, sizeof(str), "%sframe: %03d/%03d\n", str, g_framenum[client]-1, totalframes);
@@ -427,7 +460,7 @@ public void ShowTasHint(int client, int totalframes, frame[FRAME_SIZE]){
 	int hour = RoundToFloor(time/3600.0); time -= float(hour)*3600.0;
 	int minute = RoundToFloor(time/60.0); time -= float(minute)*60.0;
 	Format(str, sizeof(str), "%stime:  %07.3fs %02d:%02d:%06.3f\n", str, time_origin, hour, minute, time);
-	Format(str, sizeof(str), "%srewind_step: %d always_tp: %s\n", str, REWIND_STEP, g_alwaystp?"true":"false");
+	Format(str, sizeof(str), "%srewind_step: %d playmode: %d\n", str, REWIND_STEP, g_playmode);
 	Format(str, sizeof(str), "%sstate: ", str);
 	switch(g_tasstate[client]){
 		case TAS_NONE:
